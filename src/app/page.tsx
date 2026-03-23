@@ -35,6 +35,7 @@ export default function Home() {
   const [generatedContent, setGeneratedContent] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [copied, setCopied] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
 
   const handleChange = (
@@ -65,27 +66,48 @@ export default function Home() {
       if (!response.body) throw new Error("No response body");
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      // stream: true で日本語などマルチバイト文字がチャンク境界をまたいでも正しくデコード
+      const decoder = new TextDecoder("utf-8", { fatal: false });
+      // SSE行がチャンク境界で分断されてもパースできるようにバッファを保持
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        // 最後の要素は未完成の可能性があるのでバッファに残す
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
           if (line.startsWith("data: ")) {
-            const data = line.slice(6);
+            const data = line.slice(6).trim();
             if (data === "[DONE]") continue;
             try {
               const parsed = JSON.parse(data);
               if (parsed.text) {
                 setGeneratedContent((prev) => prev + parsed.text);
+              } else if (parsed.error) {
+                setGeneratedContent("エラーが発生しました: " + parsed.error);
               }
             } catch {
               // skip parse errors
             }
+          }
+        }
+      }
+      // ストリーム終了後に残ったバッファを処理
+      if (buffer.startsWith("data: ")) {
+        const data = buffer.slice(6).trim();
+        if (data && data !== "[DONE]") {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.text) {
+              setGeneratedContent((prev) => prev + parsed.text);
+            }
+          } catch {
+            // skip
           }
         }
       }
@@ -103,8 +125,10 @@ export default function Home() {
     setShowResult(false);
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(generatedContent);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(generatedContent);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const completionPercent = form.theme
@@ -315,7 +339,7 @@ export default function Home() {
                   </div>
                   {!isGenerating && generatedContent && (
                     <div className="flex gap-2">
-                      <button onClick={handleCopy} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: "rgba(255,255,255,0.2)", color: "white" }}>コピー</button>
+                      <button onClick={handleCopy} className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all" style={{ background: "rgba(255,255,255,0.2)", color: "white" }}>{copied ? "✓ コピー済み" : "コピー"}</button>
                       <button onClick={handleReset} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: "rgba(255,255,255,0.15)", color: "white" }}>リセット</button>
                     </div>
                   )}
